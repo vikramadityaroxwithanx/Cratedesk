@@ -5,7 +5,8 @@ import { ActorBadge, VerdictBadge } from "@/components/Badges";
 import { ListingForm } from "@/components/ListingForm";
 import { PriceChart } from "@/components/PriceChart";
 import { logPrice, newListing, removeListing, saveListing } from "@/app/actions";
-import { getListing, priceHistory } from "@/lib/repo";
+import { assess, getListing, priceHistory } from "@/lib/repo";
+import { config } from "@/lib/config";
 import { inr, when } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
@@ -19,10 +20,10 @@ export default async function ListingPage({ params, searchParams }: { params: Pr
       <>
         <Nav />
         <main className="wrap">
-          <p><Link href="/" className="muted">← Board</Link></p>
-          <h1>Add a listing manually</h1>
-          <p className="sub">Usually Claude does this for you — but you can always add or fix things by hand.</p>
-          <div className="panel"><ListingForm action={newListing} submit="Add to board" /></div>
+          <p><Link href="/" className="muted">← Pipeline</Link></p>
+          <h1>Add a lead manually</h1>
+          <p className="sub">Usually Claude does this for you — your team can always add or fix things by hand.</p>
+          <div className="panel"><ListingForm action={newListing} submit="Add to pipeline" /></div>
         </main>
       </>
     );
@@ -31,20 +32,21 @@ export default async function ListingPage({ params, searchParams }: { params: Pr
   const l = await getListing(Number(id));
   if (!l) notFound();
   const hist = await priceHistory(l.id);
+  const a = assess(l);
 
   return (
     <>
       <Nav />
       <main className="wrap">
-        <p><Link href="/" className="muted">← Board</Link></p>
-        {saved && <div className="flash">Saved. Claude will see your changes next time it reads the board.</div>}
+        <p><Link href="/" className="muted">← Pipeline</Link></p>
+        {saved && <div className="flash">Saved. Claude will see your changes next time it reads the pipeline.</div>}
         <div className="spread">
           <div>
             <h1>{l.title}</h1>
             <div className="row" style={{ gap: 8, marginBottom: 18 }}>
               <VerdictBadge l={l} />
               <ActorBadge actor={l.created_by} />
-              {l.last_edited_by !== l.created_by && <span className="badge human">Edited by you</span>}
+              {l.last_edited_by !== l.created_by && <span className="badge human">Edited by team</span>}
               <span className="muted">updated {when(l.updated_at)}</span>
             </div>
           </div>
@@ -59,11 +61,14 @@ export default async function ListingPage({ params, searchParams }: { params: Pr
 
           <aside style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <div className="panel">
-              <h2 style={{ marginTop: 0 }}>Price history</h2>
-              <div className="spread" style={{ alignItems: "baseline", marginBottom: 8 }}>
-                <span className="price">{inr(l.price_inr)}</span>
-                <span className="fair">fair {inr(l.fair_low_inr)}–{inr(l.fair_high_inr)}</span>
+              <h2 style={{ marginTop: 0 }}>Deal check</h2>
+              <div className="marginbox">
+                <div><div className="k">Asking</div><div className="v">{inr(l.price_inr)}</div></div>
+                <div><div className="k">Resale range</div><div className="v">{inr(l.fair_low_inr)}–{inr(l.fair_high_inr)}</div></div>
+                <div><div className="k">Est. margin</div><div className="v" style={{ color: a ? `var(--${a.key})` : undefined }}>{a ? `${inr(a.marginInr)} (${Math.round(a.margin * 100)}%)` : "—"}</div></div>
+                <div><div className="k">Max buy @ {Math.round(config.targetMargin * 100)}%</div><div className="v">{a ? inr(a.maxBuy) : "—"}</div></div>
               </div>
+              <h2>Price history</h2>
               <PriceChart points={hist.map((p) => ({ t: new Date(p.recorded_at).getTime(), v: p.price_inr }))} low={l.fair_low_inr} high={l.fair_high_inr} />
               <table>
                 <tbody>
@@ -85,7 +90,7 @@ export default async function ListingPage({ params, searchParams }: { params: Pr
             </div>
             <form action={removeListing} className="panel">
               <input type="hidden" name="id" value={l.id} />
-              <button className="btn danger small">Remove from board</button>
+              <button className="btn danger small">Remove from pipeline</button>
             </form>
           </aside>
         </div>

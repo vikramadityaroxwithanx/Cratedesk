@@ -1,19 +1,20 @@
 import { db } from "./db";
+import { config } from "./config";
 import { inr } from "./format";
 
 export type Actor = "claude" | "human";
 
-import { STATUSES } from "./statuses";
-export { STATUSES };
+import { STATUSES, CATEGORIES, CONDITIONS } from "./statuses";
+export { STATUSES, CATEGORIES, CONDITIONS };
 export type Status = (typeof STATUSES)[number];
 
 export type Listing = {
   id: number;
+  category: string | null;
   title: string;
-  platform: string | null;
-  region: string | null;
+  edition: string | null;
   condition: string | null;
-  completeness: string | null;
+  includes: string | null;
   price_inr: number | null;
   fair_low_inr: number | null;
   fair_high_inr: number | null;
@@ -24,7 +25,7 @@ export type Listing = {
   claude_notes: string | null;
   my_notes: string | null;
   status: Status;
-  max_bid_inr: number | null;
+  target_buy_inr: number | null;
   created_by: Actor;
   last_edited_by: Actor;
   created_at: Date;
@@ -42,9 +43,9 @@ export type PricePoint = {
 
 export type Want = {
   id: number;
+  category: string | null;
   title: string;
-  platform: string | null;
-  region: string | null;
+  edition: string | null;
   min_condition: string | null;
   max_price_inr: number | null;
   notes: string | null;
@@ -68,13 +69,13 @@ export type Offer = {
 };
 
 const LISTING_FIELDS = [
-  "title", "platform", "region", "condition", "completeness", "price_inr", "fair_low_inr",
+  "category", "title", "edition", "condition", "includes", "price_inr", "fair_low_inr",
   "fair_high_inr", "source", "source_url", "seller", "location", "claude_notes", "my_notes",
-  "status", "max_bid_inr",
+  "status", "target_buy_inr",
 ] as const;
 export type ListingInput = Partial<Pick<Listing, (typeof LISTING_FIELDS)[number]>>;
 
-const WANT_FIELDS = ["title", "platform", "region", "min_condition", "max_price_inr", "notes", "active"] as const;
+const WANT_FIELDS = ["category", "title", "edition", "min_condition", "max_price_inr", "notes", "active"] as const;
 export type WantInput = Partial<Pick<Want, (typeof WANT_FIELDS)[number]>>;
 
 function pick<T extends Record<string, unknown>>(obj: T, keys: readonly string[]) {
@@ -83,12 +84,21 @@ function pick<T extends Record<string, unknown>>(obj: T, keys: readonly string[]
   return out;
 }
 
-/** Deterministic verdict from the price vs the fair range (no AI in the app). */
-export function verdict(l: Pick<Listing, "price_inr" | "fair_low_inr" | "fair_high_inr">) {
+/**
+ * Deterministic deal check (no AI in the app): expected gross margin if bought at the
+ * asking price and resold at the midpoint of Claude's resale range, vs the dealer's target.
+ */
+export function assess(l: Pick<Listing, "price_inr" | "fair_low_inr" | "fair_high_inr">, target = config.targetMargin) {
   if (l.price_inr == null || l.fair_low_inr == null || l.fair_high_inr == null) return null;
-  if (l.price_inr < l.fair_low_inr) return { key: "deal", label: "Below market" } as const;
-  if (l.price_inr > l.fair_high_inr) return { key: "high", label: "Above market" } as const;
-  return { key: "fair", label: "Fair price" } as const;
+  const resale = (l.fair_low_inr + l.fair_high_inr) / 2;
+  if (resale <= 0) return null;
+  const marginInr = Math.round(resale - l.price_inr);
+  const margin = marginInr / resale;
+  const maxBuy = Math.floor((resale * (1 - target)) / 100) * 100;
+  const pct = `${Math.round(margin * 100)}%`;
+  if (margin >= target) return { key: "deal", label: `Buy · ${pct} margin`, margin, marginInr, maxBuy } as const;
+  if (margin >= 0) return { key: "fair", label: `Negotiate · ${pct} margin`, margin, marginInr, maxBuy } as const;
+  return { key: "high", label: `Pass · ${pct} margin`, margin, marginInr, maxBuy } as const;
 }
 
 export async function logActivity(actor: Actor | "seller", action: string, detail?: string) {
@@ -112,7 +122,7 @@ export async function createListing(input: ListingInput & { title: string }, act
     await sql`INSERT INTO price_points (listing_id, price_inr, note, actor)
               VALUES (${row.id}, ${row.price_inr}, ${"First seen"}, ${actor})`;
   }
-  await logActivity(actor, "added listing", `#${row.id} ${row.title}`);
+  await logActivity(actor, "added lead", `#${row.id} ${row.title}`);
   return row;
 }
 
@@ -131,14 +141,14 @@ export async function updateListing(id: number, input: ListingInput, actor: Acto
     await sql`INSERT INTO price_points (listing_id, price_inr, note, actor)
               VALUES (${id}, ${data.price_inr as number}, ${priceNote ?? "Price updated"}, ${actor})`;
   }
-  await logActivity(actor, "updated listing", `#${id} ${row.title}: ${Object.keys(data).join(", ").replaceAll("_inr", "").replaceAll("_", " ")}`);
+  await logActivity(actor, "updated lead", `#${id} ${row.title}: ${Object.keys(data).join(", ").replaceAll("_inr", "").replaceAll("fair low", "resale low").replaceAll("_", " ")}`);
   return row;
 }
 
 export async function deleteListing(id: number, actor: Actor) {
   const sql = await db();
   const [row] = await sql<Listing[]>`DELETE FROM listings WHERE id = ${id} RETURNING *`;
-  if (row) await logActivity(actor, "removed listing", `#${id} ${row.title}`);
+  if (row) await logActivity(actor, "removed lead", `#${id} ${row.title}`);
   return row ?? null;
 }
 
@@ -148,11 +158,13 @@ export async function getListing(id: number) {
   return row ?? null;
 }
 
-export async function listListings(status?: string) {
+export async function listListings(opts: { status?: string; category?: string } = {}) {
   const sql = await db();
-  return status
-    ? sql<Listing[]>`SELECT * FROM listings WHERE status = ${status} ORDER BY updated_at DESC`
-    : sql<Listing[]>`SELECT * FROM listings ORDER BY updated_at DESC`;
+  return sql<Listing[]>`
+    SELECT * FROM listings WHERE true
+      ${opts.status ? sql`AND status = ${opts.status}` : sql``}
+      ${opts.category ? sql`AND category = ${opts.category}` : sql``}
+    ORDER BY updated_at DESC`;
 }
 
 export async function priceHistory(listingId: number) {
@@ -173,7 +185,7 @@ export async function createWant(input: WantInput & { title: string }, actor: Ac
   const sql = await db();
   const data = { ...pick(input, WANT_FIELDS), created_by: actor };
   const [row] = await sql<Want[]>`INSERT INTO wants ${sql(data)} RETURNING *`;
-  await logActivity(actor, "added want", row.title);
+  await logActivity(actor, "added to buy-list", row.title);
   return row;
 }
 
@@ -182,14 +194,14 @@ export async function updateWant(id: number, input: WantInput, actor: Actor) {
   const data = pick(input, WANT_FIELDS);
   if (Object.keys(data).length === 0) return getWant(id);
   const [row] = await sql<Want[]>`UPDATE wants SET ${sql(data)} WHERE id = ${id} RETURNING *`;
-  if (row) await logActivity(actor, "updated want", row.title);
+  if (row) await logActivity(actor, "updated buy-list", row.title);
   return row ?? null;
 }
 
 export async function deleteWant(id: number, actor: Actor) {
   const sql = await db();
   const [row] = await sql<Want[]>`DELETE FROM wants WHERE id = ${id} RETURNING *`;
-  if (row) await logActivity(actor, "removed want", row.title);
+  if (row) await logActivity(actor, "removed from buy-list", row.title);
 }
 
 export async function getWant(id: number) {
@@ -212,7 +224,7 @@ export async function createOffer(input: Omit<Offer, "id" | "status" | "created_
   const sql = await db();
   const [row] = await sql<Offer[]>`INSERT INTO offers ${sql(input)} RETURNING *`;
   const want = await getWant(input.want_id);
-  await logActivity("seller", "sent offer", `${input.seller_name} → ${want?.title ?? "want"}${input.price_inr ? ` at ${inr(input.price_inr)}` : ""}`);
+  await logActivity("seller", "sent offer", `${input.seller_name} → ${want?.title ?? "buy-list item"}${input.price_inr ? ` at ${inr(input.price_inr)}` : ""}`);
   return row;
 }
 

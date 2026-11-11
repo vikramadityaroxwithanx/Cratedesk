@@ -4,8 +4,8 @@ import { z } from "zod";
 import { baseUrlFrom, config } from "@/lib/config";
 import { inr } from "@/lib/format";
 import {
-  STATUSES, createListing, createWant, getListing, listListings, listOffers, listWants,
-  priceHistory, updateListing, verdict, type Listing,
+  CATEGORIES, CONDITIONS, STATUSES, assess, createListing, createWant, getListing, listListings,
+  listOffers, listWants, priceHistory, updateListing, type Listing,
 } from "@/lib/repo";
 
 export const runtime = "nodejs";
@@ -16,120 +16,122 @@ const text = (t: string) => ({ content: [{ type: "text" as const, text: t }] });
 const fail = (t: string) => ({ content: [{ type: "text" as const, text: t }], isError: true });
 
 const inrInt = z.number().int().nonnegative();
+const category = z.enum(CATEGORIES).describe("Retro gaming = consoles, cartridges, handhelds; Vinyl = records; Trading cards = Pokémon, cricket, etc.");
 
-const listingShape = {
-  title: z.string().min(2).describe("Short item name, e.g. 'Super Nintendo (SNES) console, PAL, boxed'"),
-  platform: z.string().optional().describe("Console family, e.g. SNES, N64, PS1, Mega Drive, Game Boy"),
-  region: z.enum(["PAL", "NTSC-U", "NTSC-J", "Unknown"]).optional(),
-  condition: z.enum(["Mint", "Excellent", "Good", "Fair", "For parts"]).optional(),
-  completeness: z.enum(["Sealed", "Complete in box", "Boxed, incomplete", "Loose"]).optional(),
+const leadShape = {
+  category,
+  title: z.string().min(2).describe("Short item name, e.g. 'Super Nintendo console, PAL, boxed' or 'Pink Floyd – The Wall, 1979 UK 2LP'"),
+  edition: z.string().optional().describe("Variant that drives value: region (PAL/NTSC-J), pressing (1st UK press), set/edition (Base Set 1st Ed.)"),
+  condition: z.enum(CONDITIONS).optional(),
+  includes: z.string().optional().describe("What's included: box, manuals, controllers, inner sleeves, grading slab…"),
   price_inr: inrInt.optional().describe("Seller's asking price in INR"),
-  fair_low_inr: inrInt.optional().describe("Your estimate of the low end of a fair Indian market price, INR"),
-  fair_high_inr: inrInt.optional().describe("Your estimate of the high end of a fair Indian market price, INR"),
-  source: z.string().optional().describe("Where it is listed: OLX, Instagram, Facebook Marketplace, eBay, Quikr, WhatsApp group, shop…"),
-  source_url: z.string().optional().describe("Link to the original listing, if known"),
+  fair_low_inr: inrInt.optional().describe("Your estimate of the LOW end of what the dealer could resell it for in India, INR"),
+  fair_high_inr: inrInt.optional().describe("Your estimate of the HIGH end of what the dealer could resell it for in India, INR"),
+  source: z.string().optional().describe("Where it's offered: OLX, Instagram, Facebook Marketplace, estate sale, walk-in, WhatsApp group…"),
+  source_url: z.string().optional(),
   seller: z.string().optional(),
-  location: z.string().optional().describe("City of the seller"),
-  claude_notes: z.string().optional().describe("Your assessment: red flags, what to ask the seller, how it compares to fair value"),
+  location: z.string().optional().describe("Seller's city"),
+  claude_notes: z.string().optional().describe("Your assessment: authenticity/red flags, condition questions to ask, comparable sales"),
 };
 
 function summarize(l: Listing, base: string) {
-  const v = verdict(l);
+  const a = assess(l);
   return [
-    `#${l.id} ${l.title}`,
-    `  ${[l.platform, l.region, l.condition, l.completeness].filter(Boolean).join(" · ")}`,
-    `  Asking ${inr(l.price_inr)} | fair ${inr(l.fair_low_inr)}–${inr(l.fair_high_inr)}${v ? ` → ${v.label}` : ""}`,
-    `  Status: ${l.status}${l.max_bid_inr ? ` | max bid ${inr(l.max_bid_inr)}` : ""}${l.my_notes ? ` | owner notes: ${l.my_notes}` : ""}`,
+    `#${l.id} [${l.category ?? "Uncategorised"}] ${l.title}`,
+    `  ${[l.edition, l.condition, l.includes].filter(Boolean).join(" · ")}`,
+    `  Asking ${inr(l.price_inr)} | resale ${inr(l.fair_low_inr)}–${inr(l.fair_high_inr)}${a ? ` → ${a.label} (${inr(a.marginInr)}); max buy at target margin ${inr(a.maxBuy)}` : ""}`,
+    `  Status: ${l.status}${l.target_buy_inr ? ` | dealer's target buy ${inr(l.target_buy_inr)}` : ""}${l.my_notes ? ` | dealer notes: ${l.my_notes}` : ""}`,
     `  ${base}/listing/${l.id}`,
   ].join("\n");
 }
 
 function buildServer(base: string) {
-  const server = new McpServer({ name: "RetroRadar", version: "0.1.0" });
+  const server = new McpServer({ name: config.brand, version: "0.2.0" });
+  const target = `${Math.round(config.targetMargin * 100)}%`;
 
   server.registerTool(
-    "add_listing",
+    "add_lead",
     {
-      title: "Add listing to board",
+      title: "Add sourcing lead",
       description:
-        "Save a retro console or game listing the collector is considering to their RetroRadar board. " +
-        "Extract details from the URL, screenshot or text the user gives you, and estimate a fair price range " +
-        "for the Indian second-hand market (INR) before calling. The app tracks price history and lets the collector edit it.",
-      inputSchema: listingShape,
+        `Save an item the dealer (${config.business}) might buy for resale to their ${config.brand} sourcing pipeline. ` +
+        "Read the URL, screenshot, photo or text the user gives you; identify the exact item and edition; estimate a realistic " +
+        `Indian resale range in INR; and note authenticity or condition risks before calling. The app computes margin vs the dealer's ${target} target.`,
+      inputSchema: leadShape,
     },
     async (args) => {
       const row = await createListing(args, "claude");
-      return text(`Added to the board.\n\n${summarize(row, base)}\n\nBoard: ${base}/`);
+      return text(`Added to the pipeline.\n\n${summarize(row, base)}\n\nPipeline: ${base}/`);
     },
   );
 
   server.registerTool(
-    "update_listing",
+    "update_lead",
     {
-      title: "Update a listing",
-      description:
-        "Update a listing on the board, e.g. a new asking price (this is logged to price history), a status change, or new notes.",
+      title: "Update a lead",
+      description: "Update a lead: new asking price (logged to price history), status, resale estimate or notes.",
       inputSchema: {
-        id: z.number().int().describe("Listing id from get_board"),
-        ...Object.fromEntries(Object.entries(listingShape).map(([k, v]) => [k, (v as z.ZodTypeAny).optional()])),
+        id: z.number().int().describe("Lead id from get_pipeline"),
+        ...Object.fromEntries(Object.entries(leadShape).map(([k, v]) => [k, (v as z.ZodTypeAny).optional()])),
         status: z.enum(STATUSES).optional(),
-        max_bid_inr: inrInt.optional().describe("The most the collector will pay"),
-        price_note: z.string().optional().describe("Why the price changed, e.g. 'seller dropped price'"),
+        target_buy_inr: inrInt.optional().describe("The most the dealer will pay"),
+        price_note: z.string().optional().describe("Why the price changed, e.g. 'seller countered'"),
       },
     },
     async (args) => {
       const { id, price_note, ...rest } = args as { id: number; price_note?: string } & Record<string, unknown>;
       const row = await updateListing(id, rest, "claude", price_note);
-      if (!row) return fail(`No listing #${id}. Call get_board to see ids.`);
+      if (!row) return fail(`No lead #${id}. Call get_pipeline to see ids.`);
       return text(`Updated.\n\n${summarize(row, base)}`);
     },
   );
 
   server.registerTool(
-    "get_board",
+    "get_pipeline",
     {
-      title: "Read the board",
+      title: "Read the sourcing pipeline",
       description:
-        "Read the collector's saved listings with prices, fair ranges, verdicts, status and the collector's own notes and edits. " +
-        "Use this before advising on what to buy, or to find a listing id.",
+        "Read the dealer's sourcing leads with asking prices, resale estimates, computed margins, status and the dealer's own edits and notes. " +
+        "Use before advising what to buy or to find a lead id.",
       inputSchema: {
         status: z.enum(STATUSES).optional(),
-        listing_id: z.number().int().optional().describe("Return one listing with its full price history"),
+        category: category.optional(),
+        lead_id: z.number().int().optional().describe("Return one lead with its full price history"),
       },
       annotations: { readOnlyHint: true },
     },
-    async ({ status, listing_id }) => {
-      if (listing_id) {
-        const l = await getListing(listing_id);
-        if (!l) return fail(`No listing #${listing_id}.`);
-        const hist = await priceHistory(listing_id);
+    async ({ status, category, lead_id }) => {
+      if (lead_id) {
+        const l = await getListing(lead_id);
+        if (!l) return fail(`No lead #${lead_id}.`);
+        const hist = await priceHistory(lead_id);
         const h = hist.map((p) => `  ${new Date(p.recorded_at).toISOString().slice(0, 10)} ${inr(p.price_inr)} (${p.actor}${p.note ? `: ${p.note}` : ""})`);
         return text(`${summarize(l, base)}\n\nClaude's notes: ${l.claude_notes ?? "—"}\n\nPrice history:\n${h.join("\n") || "  none"}`);
       }
-      const rows = await listListings(status);
-      if (!rows.length) return text(`The board is empty${status ? ` for status "${status}"` : ""}. Board: ${base}/`);
-      return text(`${rows.length} listing(s):\n\n${rows.map((r) => summarize(r, base)).join("\n\n")}`);
+      const rows = await listListings({ status, category });
+      if (!rows.length) return text(`No leads${status || category ? " matching that filter" : ""}. Pipeline: ${base}/`);
+      return text(`${rows.length} lead(s), target margin ${target}:\n\n${rows.map((r) => summarize(r, base)).join("\n\n")}`);
     },
   );
 
   server.registerTool(
-    "add_want",
+    "add_to_buylist",
     {
-      title: "Add to public want-list",
+      title: "Add to public buy-list",
       description:
-        "Add an item the collector is hunting for to their PUBLIC want-list page, where sellers can submit offers without an account.",
+        `Add an item the dealer wants to acquire to their PUBLIC "We're buying" page, where collectors and sellers submit offers without an account.`,
       inputSchema: {
-        title: z.string().min(2).describe("What they want, e.g. 'Nintendo 64 with Expansion Pak'"),
-        platform: z.string().optional(),
-        region: z.enum(["PAL", "NTSC-U", "NTSC-J", "Any"]).optional(),
-        min_condition: z.enum(["Mint", "Excellent", "Good", "Fair", "Any"]).optional(),
-        max_price_inr: inrInt.optional().describe("Budget ceiling in INR, shown publicly"),
-        notes: z.string().optional().describe("Public note to sellers, e.g. 'must include original controller'"),
+        category,
+        title: z.string().min(2).describe("What the dealer is buying, e.g. 'Nintendo 64 consoles' or 'Bollywood OST LPs, 1970s'"),
+        edition: z.string().optional(),
+        min_condition: z.enum(CONDITIONS).optional(),
+        max_price_inr: inrInt.optional().describe("Max the dealer will pay per item, INR (shown publicly)"),
+        notes: z.string().optional().describe("Public note to sellers, e.g. 'working units only, original controllers preferred'"),
       },
     },
     async (args) => {
       const w = await createWant(args, "claude");
-      return text(`Added "${w.title}" to the public want-list (max ${inr(w.max_price_inr)}).\nShare this link with sellers: ${base}/w/${config.handle}`);
+      return text(`Added "${w.title}" to the public buy-list (up to ${inr(w.max_price_inr)}).\nShare: ${base}/buy/${config.handle}`);
     },
   );
 
@@ -138,17 +140,17 @@ function buildServer(base: string) {
     {
       title: "Read seller offers",
       description:
-        "Read offers that sellers submitted on the collector's public want-list, so you can compare them against the budget and fair value.",
+        "Read offers that sellers submitted on the dealer's public buy-list page, to compare against the max price and estimated resale value.",
       inputSchema: { status: z.enum(["new", "accepted", "declined"]).optional() },
       annotations: { readOnlyHint: true },
     },
     async ({ status }) => {
       const [offers, wants] = await Promise.all([listOffers({ status }), listWants()]);
-      if (!offers.length) return text(`No offers yet. Want-list: ${base}/w/${config.handle}`);
-      const budget = new Map(wants.map((w) => [w.id, w.max_price_inr]));
+      if (!offers.length) return text(`No offers yet. Buy-list: ${base}/buy/${config.handle}`);
+      const cap = new Map(wants.map((w) => [w.id, w.max_price_inr]));
       return text(
         offers
-          .map((o) => `Offer #${o.id} for "${o.want_title}" from ${o.seller_name} (${o.contact}): ${inr(o.price_inr)} vs budget ${inr(budget.get(o.want_id))}; condition ${o.condition ?? "—"}; status ${o.status}${o.message ? `\n  "${o.message}"` : ""}`)
+          .map((o) => `Offer #${o.id} for "${o.want_title}" from ${o.seller_name} (${o.contact}): ${inr(o.price_inr)} vs max ${inr(cap.get(o.want_id))}; condition ${o.condition ?? "—"}; status ${o.status}${o.message ? `\n  "${o.message}"` : ""}`)
           .join("\n\n") + `\n\nManage offers: ${base}/wants`,
       );
     },

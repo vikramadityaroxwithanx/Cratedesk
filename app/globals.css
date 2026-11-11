@@ -83,3 +83,11 @@ code, .code { font-family: var(--mono); background: #efece4; padding: 2px 6px; b
 }
 label > input, label > select, label > textarea { width: 100%; min-width: 0; }
 label > input[type=checkbox] { width: auto; }
+.cat { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .7px; color: var(--accent); }
+a.chip { text-decoration: none; border: 1px solid transparent; }
+a.chip.on { background: var(--ink); color: #fff; }
+.card .k { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
+.marginbox { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 8px 0 12px; }
+.marginbox > div { background: #faf9f6; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+.marginbox .k { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
+.marginbox .v { font-family: var(--mono); font-weight: 700; }

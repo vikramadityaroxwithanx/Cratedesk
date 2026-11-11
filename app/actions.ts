@@ -32,11 +32,11 @@ const num = (f: FormData, k: string) => {
 function listingFromForm(f: FormData) {
   const status = str(f, "status");
   return {
+    category: str(f, "category"),
     title: str(f, "title") ?? undefined,
-    platform: str(f, "platform"),
-    region: str(f, "region"),
+    edition: str(f, "edition"),
     condition: str(f, "condition"),
-    completeness: str(f, "completeness"),
+    includes: str(f, "includes"),
     price_inr: num(f, "price_inr"),
     fair_low_inr: num(f, "fair_low_inr"),
     fair_high_inr: num(f, "fair_high_inr"),
@@ -46,7 +46,7 @@ function listingFromForm(f: FormData) {
     location: str(f, "location"),
     claude_notes: str(f, "claude_notes"),
     my_notes: str(f, "my_notes"),
-    max_bid_inr: num(f, "max_bid_inr"),
+    target_buy_inr: num(f, "target_buy_inr"),
     status: status && (STATUSES as readonly string[]).includes(status) ? (status as (typeof STATUSES)[number]) : undefined,
   };
 }
@@ -73,7 +73,7 @@ export async function logout() {
 export async function saveListing(f: FormData) {
   await requireAuth();
   const id = Number(f.get("id"));
-  await updateListing(id, listingFromForm(f), "human", str(f, "price_note") ?? "Edited by owner");
+  await updateListing(id, listingFromForm(f), "human", str(f, "price_note") ?? "Edited by dealer");
   revalidatePath("/");
   revalidatePath(`/listing/${id}`);
   redirect(`/listing/${id}?saved=1`);
@@ -118,9 +118,9 @@ export async function removeListing(f: FormData) {
 
 function wantFromForm(f: FormData) {
   return {
+    category: str(f, "category"),
     title: str(f, "title") ?? undefined,
-    platform: str(f, "platform"),
-    region: str(f, "region"),
+    edition: str(f, "edition"),
     min_condition: str(f, "min_condition"),
     max_price_inr: num(f, "max_price_inr"),
     notes: str(f, "notes"),
@@ -133,7 +133,7 @@ export async function saveWant(f: FormData) {
   const id = Number(f.get("id"));
   await updateWant(id, wantFromForm(f), "human");
   revalidatePath("/wants");
-  revalidatePath(`/w/${config.handle}`);
+  revalidatePath(`/buy/${config.handle}`);
 }
 
 export async function newWant(f: FormData) {
@@ -142,14 +142,14 @@ export async function newWant(f: FormData) {
   if (!data.title) return;
   await createWant({ ...data, title: data.title }, "human");
   revalidatePath("/wants");
-  revalidatePath(`/w/${config.handle}`);
+  revalidatePath(`/buy/${config.handle}`);
 }
 
 export async function removeWant(f: FormData) {
   await requireAuth();
   await deleteWant(Number(f.get("id")), "human");
   revalidatePath("/wants");
-  revalidatePath(`/w/${config.handle}`);
+  revalidatePath(`/buy/${config.handle}`);
 }
 
 export async function markOffer(f: FormData) {
