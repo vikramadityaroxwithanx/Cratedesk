@@ -4,7 +4,7 @@ import { z } from "zod";
 import { baseUrlFrom, config } from "@/lib/config";
 import { inr } from "@/lib/format";
 import {
-  CATEGORIES, CONDITIONS, STATUSES, assess, createListing, createWant, getListing, listListings,
+  CATEGORIES, CONDITIONS, STATUSES, assess, createListing, createWant, findDuplicateLeads, getListing, listListings,
   listOffers, listWants, priceHistory, updateListing, type Listing,
 } from "@/lib/repo";
 
@@ -56,10 +56,23 @@ function buildServer(base: string) {
       description:
         `Save an item the dealer (${config.business}) might buy for resale to their ${config.brand} sourcing pipeline. ` +
         "Read the URL, screenshot, photo or text the user gives you; identify the exact item and edition; estimate a realistic " +
-        `Indian resale range in INR; and note authenticity or condition risks before calling. The app computes margin vs the dealer's ${target} target.`,
-      inputSchema: leadShape,
+        `Indian resale range in INR; and note authenticity or condition risks before calling. The app computes margin vs the dealer's ${target} target. ` +
+        "If the same listing is already open in the pipeline, nothing is saved and the existing lead is returned: use update_lead for it, or set allow_duplicate only if it is genuinely a second unit.",
+      inputSchema: {
+        ...leadShape,
+        allow_duplicate: z.boolean().optional().describe("Set true only when the dealer confirms this is a separate unit, not the same listing"),
+      },
     },
-    async (args) => {
+    async ({ allow_duplicate, ...args }) => {
+      if (!allow_duplicate) {
+        const dupes = await findDuplicateLeads(args);
+        if (dupes.length) {
+          return text(
+            `Not added: this looks like a lead that's already open in the pipeline.\n\n${dupes.map((d) => summarize(d, base)).join("\n\n")}\n\n` +
+            "Use update_lead with that id to change price, status or notes. If it really is a separate unit, call add_lead again with allow_duplicate: true.",
+          );
+        }
+      }
       const row = await createListing(args, "claude");
       return text(`Added to the pipeline.\n\n${summarize(row, base)}\n\nPipeline: ${base}/`);
     },

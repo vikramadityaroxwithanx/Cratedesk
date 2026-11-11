@@ -126,6 +126,25 @@ export async function createListing(input: ListingInput & { title: string }, act
   return row;
 }
 
+const normUrl = (u: string) => u.trim().toLowerCase().replace(/^https?:\/\/(www\.)?/, "").replace(/[?#].*$/, "").replace(/\/+$/, "");
+const normTitle = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+
+/**
+ * Open leads that look like the same item: same listing URL, or same title from the same
+ * seller. Bought/passed leads are ignored so a dealer can re-add an item that came back.
+ */
+export async function findDuplicateLeads(input: { title: string; source_url?: string | null; seller?: string | null }) {
+  const sql = await db();
+  const open = await sql<Listing[]>`SELECT * FROM listings WHERE status NOT IN ('bought', 'passed')`;
+  const url = input.source_url ? normUrl(input.source_url) : "";
+  const title = normTitle(input.title);
+  const seller = (input.seller ?? "").trim().toLowerCase();
+  return open.filter((l) =>
+    (url && l.source_url && normUrl(l.source_url) === url) ||
+    (normTitle(l.title) === title && (l.seller ?? "").trim().toLowerCase() === seller),
+  );
+}
+
 export async function updateListing(id: number, input: ListingInput, actor: Actor, priceNote?: string) {
   const sql = await db();
   const before = await getListing(id);
