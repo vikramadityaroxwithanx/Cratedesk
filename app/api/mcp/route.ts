@@ -4,7 +4,7 @@ import { z } from "zod";
 import { baseUrlFrom, config } from "@/lib/config";
 import { inr } from "@/lib/format";
 import {
-  CATEGORIES, CONDITIONS, STATUSES, assess, createListing, createWant, findDuplicateLeads, getListing, listListings,
+  CATEGORIES, CONDITIONS, STATUSES, assess, createListing, createWant, deleteListing, findDuplicateLeads, getListing, listListings,
   listOffers, listWants, priceHistory, updateListing, type Listing,
 } from "@/lib/repo";
 
@@ -96,6 +96,23 @@ function buildServer(base: string) {
       const row = await updateListing(id, rest, "claude", price_note);
       if (!row) return fail(`No lead #${id}. Call get_pipeline to see ids.`);
       return text(`Updated.\n\n${summarize(row, base)}`);
+    },
+  );
+
+  server.registerTool(
+    "delete_lead",
+    {
+      title: "Delete a lead",
+      description:
+        "Permanently delete a lead and its price history from the pipeline, when the dealer asks to remove it. " +
+        "Confirm which lead (by id and title from get_pipeline) before calling. To keep a record instead, use update_lead with status 'passed'.",
+      inputSchema: { id: z.number().int().describe("Lead id from get_pipeline") },
+      annotations: { destructiveHint: true, idempotentHint: true },
+    },
+    async ({ id }) => {
+      const row = await deleteListing(id, "claude");
+      if (!row) return fail(`No lead #${id}. Call get_pipeline to see ids.`);
+      return text(`Deleted lead #${row.id} "${row.title}" and its price history.\nPipeline: ${base}/`);
     },
   );
 

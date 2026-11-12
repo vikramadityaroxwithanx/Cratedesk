@@ -31,6 +31,7 @@ export default async function Connect() {
         <tbody>
           <tr><td><code>add_lead</code></td><td>Save an item to buy, with Claude&apos;s identification, resale range and risk notes</td></tr>
           <tr><td><code>update_lead</code></td><td>Change asking price (logged to history), status, estimate or notes</td></tr>
+          <tr><td><code>delete_lead</code></td><td>Delete a lead you no longer want</td></tr>
           <tr><td><code>get_pipeline</code></td><td>Read leads, computed margins and your team&apos;s edits</td></tr>
           <tr><td><code>add_to_buylist</code></td><td>Add an item to your public “We&apos;re buying” page</td></tr>
           <tr><td><code>get_offers</code></td><td>Read offers sellers sent from your buy-list</td></tr>

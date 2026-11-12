@@ -41,6 +41,7 @@ The dealer's Claude reads the listing, photo or seller message, identifies the i
 |---|---|---|
 | `add_lead` | write | Save an item to buy, with Claude's identification, resale range and risk notes |
 | `update_lead` | write | Change asking price (logged to history), status, estimate or notes |
+| `delete_lead` | write | Permanently delete a lead and its price history when the dealer asks |
 | `get_pipeline` | read | Read leads, computed margins and the team's edits; filter by category/status, or one lead with price history |
 | `add_to_buylist` | write | Add an item to the public "We're buying" page |
 | `get_offers` | read | Read offers sellers submitted on the buy-list |
